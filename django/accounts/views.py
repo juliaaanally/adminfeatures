@@ -3,11 +3,16 @@ from django.core.mail import send_mail
 from django.conf import settings
 from django.shortcuts import render
 from django.contrib.auth.hashers import check_password, make_password
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 
-from .serializers import CustomerSerializer, StaffSerializer
+from .serializers import CustomerSerializer, StaffSerializer, AdminProfileSerializer
 from .models import Customer, Staff
 
 # TEMPORARY in-memory dictionary to store reset tokens (DO NOT use in production)
@@ -108,3 +113,60 @@ def reset_password(request, token):
         return render(request, 'reset_credentials/reset_password.html', {'success': 'Password reset successful'})
 
     return render(request, 'reset_credentials/reset_password.html')
+
+# =============================
+# Edit Admin Profile (GET & PUT)
+# =============================
+@method_decorator(csrf_exempt, name='dispatch')
+class AdminProfileView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        email = request.query_params.get('email')
+        if not email:
+            return Response({'error': 'Email parameter is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            admin = Staff.objects.get(email=email, role='admin')
+            serializer = AdminProfileSerializer(admin)
+            return Response(serializer.data)
+        except Staff.DoesNotExist:
+            return Response({'error': 'Admin not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    def put(self, request):
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            admin = Staff.objects.get(email=email, role='admin')
+            serializer = AdminProfileSerializer(admin, data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response({'message': 'Profile updated successfully'})
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Staff.DoesNotExist:
+            return Response({'error': 'Admin not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ChangeAdminPasswordView(APIView):
+    permission_classes = [AllowAny]
+
+    def put(self, request):
+        email = request.data.get('email')
+        current_password = request.data.get('current_password')
+        new_password = request.data.get('new_password')
+
+        if not email or not current_password or not new_password:
+            return Response({'error': 'Missing fields'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            admin = Staff.objects.get(email=email, role='admin')
+            if not check_password(current_password, admin.password):
+                return Response({'error': 'Current password is incorrect'}, status=status.HTTP_400_BAD_REQUEST)
+
+            admin.password = make_password(new_password)
+            admin.save()
+            return Response({'message': 'Password changed successfully'}, status=status.HTTP_200_OK)
+        except Staff.DoesNotExist:
+            return Response({'error': 'Admin not found'}, status=status.HTTP_404_NOT_FOUND)
